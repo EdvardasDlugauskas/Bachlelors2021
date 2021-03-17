@@ -18,19 +18,25 @@ CoinType == [CoinDenominations -> Int]
 
 AccountType == [AccountNames -> CoinType]
 
+TotalSupplyType == [CoinDenominations -> Int]
+
 \* Vars
 
 VARIABLE accounts
+VARIABLE totalSupply
 
-vars == << accounts >>
+vars == << accounts, totalSupply >>
 
-\* Transitions
+\* Helpers
 
-\* Increment(acc, denom) == 
-\*     LET newValue == accounts[acc][denom] + 1 IN 
-\*     /\ accounts' = [accounts EXCEPT ![acc][denom] = newValue]
-\*     /\ UNCHANGED << >>
-    
+\* Here f is a function of DOMAIN -> Int, S is the subset of DOMAIN to calculate the sum over
+RECURSIVE Sum(_,_)
+Sum(f,S) == IF S = {} THEN 0
+            ELSE 
+                LET x == CHOOSE x \in S : TRUE
+                IN  f[x] + Sum(f, S \ {x})
+
+\* Transitions  
     
 Send(sender, receiver, denomination, amount) ==
     LET 
@@ -40,12 +46,15 @@ Send(sender, receiver, denomination, amount) ==
     /\ sender /= receiver
     /\ accounts[sender][denomination] >= amount
     /\ accounts' = [accounts EXCEPT ![sender][denomination] = senderBalance, ![receiver][denomination] = receiverBalance]
+    /\ UNCHANGED << totalSupply >>
 
 \* Specification
 
 Init == 
     /\ accounts = 
         (Acc1 :> (BTC :> 0 @@ ETH :> 1) @@ Acc2 :> (BTC :> 2 @@ ETH :> 3))
+    /\ totalSupply = 
+        (BTC :> 2 @@ ETH :> 4)
 
 Next == 
     \/ \E sender \in AccountNames:
@@ -58,17 +67,24 @@ Spec == Init /\ [][Next]_vars
 
 \* Invariants
 
-TypeOK == accounts \in AccountType
+TypeOK == /\ accounts \in AccountType
+          /\ totalSupply \in TotalSupplyType
 
-\* Just a debugging helper invariant
-SupplyDoesNotIncrease == 
-    \A acc \in AccountNames: 
-        \A denom \in CoinDenominations:
-            accounts[acc][denom] < 5
+TotalSupplyCorrect == 
+    \A denom \in CoinDenominations:
+        LET
+            amountInAccounts == [acc \in AccountNames |-> accounts[acc][denom]]
+        IN totalSupply[denom] = Sum(amountInAccounts, DOMAIN accounts)
 
 NoOverdrafts == 
     \A acc \in AccountNames: 
         \A denom \in CoinDenominations:
             accounts[acc][denom] >= 0
+
+\* Just a temporary debugging helper invariant
+TEMP_SupplyDoesNotIncrease == 
+    \A acc \in AccountNames: 
+        \A denom \in CoinDenominations:
+            accounts[acc][denom] < 5
 
 =============================================================================
