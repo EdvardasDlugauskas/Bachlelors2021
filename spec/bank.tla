@@ -6,26 +6,34 @@ EXTENDS Naturals, Integers, FiniteSets, Sequences, TLC
 \* Constants
 
 CONSTANTS ETH, BTC, DOGE
-CONSTANTS Acc1, Acc2, Acc3, Acc4, Acc5
+CONSTANTS EscrowAcc, Acc1, Acc2, Acc3, Acc4, Acc5
 
-CoinDenominations == {ETH, BTC} \*, DOGE}
-AccountNames == {Acc1, Acc2} \*, Acc3, Acc4, Acc5}
+ChainNames == {ETH, BTC} \*, DOGE}
+CoinDenominations == ChainNames
+
+AccountNames == {EscrowAcc, Acc1, Acc2} \*, Acc3, Acc4, Acc5}
+
+MAX_INT_HEIGHT == 1
+MAX_INT == 0..MAX_INT_HEIGHT
+GENESIS_SUPPLY == [ c \in CoinDenominations |-> MAX_INT_HEIGHT]
 
 \* Type
 
 
-CoinType == [CoinDenominations -> Int]
+CoinType == [CoinDenominations -> MAX_INT]
 
 AccountType == [AccountNames -> CoinType]
 
-TotalSupplyType == [CoinDenominations -> Int]
+TotalSupplyType == [CoinDenominations -> MAX_INT]
+
+ChainType == [ChainNames -> AccountType]
 
 \* Vars
 
-VARIABLE accounts
+VARIABLE chains
 VARIABLE totalSupply
 
-vars == << accounts, totalSupply >>
+vars == << chains, totalSupply >>
 
 \* Helpers
 
@@ -38,53 +46,57 @@ Sum(f,S) == IF S = {} THEN 0
 
 \* Transitions  
     
-Send(sender, receiver, denomination, amount) ==
-    LET 
-        senderBalance == accounts[sender][denomination] - amount  
-        receiverBalance == accounts[receiver][denomination] + amount 
-    IN 
+LocalTransfer(sender, receiver, denomination, amount) ==
     /\ sender /= receiver
-    /\ accounts[sender][denomination] >= amount
-    /\ accounts' = [accounts EXCEPT ![sender][denomination] = senderBalance, ![receiver][denomination] = receiverBalance]
-    /\ UNCHANGED << totalSupply >>
+    /\  LET 
+        chainName == denomination
+        senderBalance == chains[chainName][sender][denomination]
+        newSenderBalance == senderBalance - amount  
+        receiverBalance == chains[chainName][receiver][denomination]
+        newReceiverBalance == receiverBalance + amount 
+        IN 
+        /\ senderBalance >= amount
+        /\ chains' = [chains EXCEPT 
+                        ![chainName][sender][denomination] = newSenderBalance, 
+                        ![chainName][receiver][denomination] = newReceiverBalance]
+        /\ UNCHANGED << totalSupply >>
 
 \* Specification
 
-Init == 
-    /\ accounts = 
-        (Acc1 :> (BTC :> 0 @@ ETH :> 1) @@ Acc2 :> (BTC :> 2 @@ ETH :> 3))
-    /\ totalSupply = 
-        (BTC :> 2 @@ ETH :> 4)
+Init ==
+    /\ \E c \in ChainType:
+        /\ chains = c
+        /\ \A denom \in CoinDenominations:
+            /\ Sum([acc \in AccountNames |-> c[denom][acc][denom]], DOMAIN c[denom]) = GENESIS_SUPPLY[denom]
+        /\ totalSupply = GENESIS_SUPPLY
 
 Next == 
-    \/ \E sender \in AccountNames:
-        \E denom \in CoinDenominations:
-            \E receiver \in AccountNames:
-                \E amt \in 0..accounts[sender][denom]:
-                    /\ Send(sender, receiver, denom, amt)
+    \* Local transfer
+    \/  \E chain \in ChainNames, sender, receiver \in AccountNames, denom \in CoinDenominations:
+            \E amt \in 0..chains[chain][sender][denom]:
+                /\ LocalTransfer(sender, receiver, denom, amt)
 
 Spec == Init /\ [][Next]_vars
 
 \* Invariants
 
-TypeOK == /\ accounts \in AccountType
+TypeOK == /\ chains \in ChainType
           /\ totalSupply \in TotalSupplyType
 
 TotalSupplyCorrect == 
     \A denom \in CoinDenominations:
         LET
-            amountInAccounts == [acc \in AccountNames |-> accounts[acc][denom]]
-        IN totalSupply[denom] = Sum(amountInAccounts, DOMAIN accounts)
+            chainName == denom
+            amountInAccounts == [acc \in AccountNames |-> chains[chainName][acc][denom]]
+        IN totalSupply[denom] = Sum(amountInAccounts, DOMAIN chains[chainName])
 
 NoOverdrafts == 
-    \A acc \in AccountNames: 
-        \A denom \in CoinDenominations:
-            accounts[acc][denom] >= 0
+    \A chainName \in ChainNames, acc \in AccountNames, denom \in CoinDenominations: 
+        chains[chainName][acc][denom] >= 0
 
 \* Just a temporary debugging helper invariant
-TEMP_SupplyDoesNotIncrease == 
-    \A acc \in AccountNames: 
-        \A denom \in CoinDenominations:
-            accounts[acc][denom] < 5
+\* TEMP_SupplyDoesNotIncrease == 
+\*     /\ \A denom \in CoinDenominations:
+\*         /\ Sum([acc \in AccountNames |-> accounts[acc][denom]], DOMAIN accounts) = GENESIS_SUPPLY[denom]
 
 =============================================================================
