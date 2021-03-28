@@ -28,6 +28,8 @@ TotalSupplyType == [CoinDenominations -> MAX_INT]
 
 ChainType == [ChainNames -> AccountType]
 
+ChannelType == {{x, y}: x, y \in ChainNames}
+
 \* Vars
 
 VARIABLE chains
