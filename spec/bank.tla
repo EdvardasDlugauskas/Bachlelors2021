@@ -16,7 +16,7 @@ AccountNames == {EscrowAcc, Acc1, Acc2, Acc3} \*, Acc4, Acc5}
 MAX_PACKET_COUNT_HEIGHT == 3
 MAX_PACKET_COUNT == 0..MAX_PACKET_COUNT_HEIGHT
 
-MAX_SUPPLY_HEIGHT == 15
+MAX_SUPPLY_HEIGHT == 4
 MAX_SUPPLY == 0..MAX_SUPPLY_HEIGHT
 GENESIS_SUPPLY == [c \in CoinDenominations |-> MAX_SUPPLY_HEIGHT]
 
@@ -50,7 +50,7 @@ vars == << chains, channels, totalSupply, lastPacketId >>
 
 \* Helpers
 
-NativeChainOf(chain) == chain
+NativeChainOf(denomination) == denomination
 
 \* Here f is a function of DOMAIN -> Int, S is the subset of DOMAIN to calculate the sum over
 RECURSIVE Sum(_,_)
@@ -61,25 +61,31 @@ Sum(f,S) == IF S = {} THEN 0
 
 \* Transitions  
 
+MintCoins(chain, receiver, denom, amount) ==
+    /\ chains' = [chains EXCEPT 
+        ![chain][receiver][denom] = chains[chain][receiver][denom] + amount]
+
+BurnCoins(chain, sender, denom, amount) ==
+    /\ chains' = [chains EXCEPT
+        ![chain][sender][denom] = chains[chain][sender][denom] - amount]
+
 LocalTransfer(chain, sender, receiver, denomination, amount) ==
-    /\  LET 
-        senderBalance == chains[chain][sender][denomination]
-        newSenderBalance == senderBalance - amount  
-        receiverBalance == chains[chain][receiver][denomination]
-        newReceiverBalance == receiverBalance + amount 
-        IN 
-        /\ senderBalance >= amount
-        /\ chains' = [chains EXCEPT 
-                        ![chain][sender][denomination] = newSenderBalance, 
-                        ![chain][receiver][denomination] = newReceiverBalance]
+    /\ chains' = [chains EXCEPT 
+                    ![chain][sender][denomination] = chains[chain][sender][denomination] - amount, 
+                    ![chain][receiver][denomination] = chains[chain][receiver][denomination] + amount]
+
+ConditionalLocalTransfer(chain, sender, receiver, denomination, amount) ==
+    /\ sender /= receiver
+    /\ sender /= EscrowAcc
+    /\ receiver /= EscrowAcc
+    /\ amount > 0
+    /\ chains[chain][sender][denomination] >= amount
+    /\ LocalTransfer(NativeChainOf(denomination), sender, receiver, denomination, amount)
 
 LocalTransferStep ==
-    /\ \E chain \in ChainNames, sender, receiver \in AccountNames \ {EscrowAcc}, denom \in CoinDenominations:
-            \E amt \in 0..chains[chain][sender][denom]:
-                /\ sender /= receiver
-                /\ sender /= EscrowAcc
-                /\ amt > 0
-                /\ LocalTransfer(NativeChainOf(denom), sender, receiver, denom, amt)
+    /\ \E chain \in ChainNames, sender, receiver \in AccountNames \ {EscrowAcc}, denomination \in CoinDenominations:
+            /\  \E amount \in 0..chains[chain][sender][denomination]:
+                ConditionalLocalTransfer(NativeChainOf(denomination), sender, receiver, denomination, amount)
     /\ UNCHANGED << totalSupply, channels, lastPacketId >>
     
  CreateOutgoingPacket(channel, sender, receiver, denomination, amount) ==
@@ -89,53 +95,76 @@ LocalTransferStep ==
         destChain == channel[2]
         packetId == lastPacketId + 1
         packet == [id |-> packetId, denom |-> denomination, amount |-> amount, sender |-> sender, receiver |-> receiver]
+        isTokenSource == sourceChain = NativeChainOf(packet.denom)
         IN
-        /\ chains[sourceChain][sender][denomination] >= amount
-        /\ LocalTransfer(sourceChain, sender, EscrowAcc, denomination, amount)
+        /\  IF isTokenSource
+            THEN LocalTransfer(sourceChain, sender, EscrowAcc, denomination, amount)
+            ELSE BurnCoins(sourceChain, sender, denomination, amount)
         /\ channels' = [channels EXCEPT ![channel] = (channels[channel] \union { packet })]
         /\ lastPacketId' = packetId
 
+ConditionalCreateOutgoingPacket(channel, sender, receiver, denomination, amount) ==
+    /\ sender /= receiver
+    /\ sender /= EscrowAcc
+    /\ receiver /= EscrowAcc
+    /\ amount > 0
+    /\ chains[channel[1]][sender][denomination] >= amount
+    /\ CreateOutgoingPacket(channel, sender, receiver, denomination, amount)
+
 CreateOutgoingPacketStep ==
     /\ lastPacketId < MAX_PACKET_COUNT_HEIGHT
-    /\ \E channel \in ChannelNameType, chain \in ChainNames, sender, receiver \in AccountNames \ {EscrowAcc}, denom \in CoinDenominations:
-        \E amt \in 0..chains[chain][sender][denom]:
-            /\ sender /= receiver
-            /\ amt > 0
-            /\ CreateOutgoingPacket(channel, sender, receiver, denom, amt)
+    /\ \E channel \in ChannelNameType, sender, receiver \in AccountNames \ {EscrowAcc}, denom \in CoinDenominations:
+        \E amt \in 0..chains[channel[1]][sender][denom]:
+            /\ ConditionalCreateOutgoingPacket(channel, sender, receiver, denom, amt)
     /\ UNCHANGED totalSupply
 
-\* TODO: mint if chain is receiving it's own denomination
-RefundTokens(packet, channel) ==
+RefundTokens(channel, packet) ==
     /\ LET 
-        source == channel[1]
-        refundAmount == packet.amount
-        refundee == packet.sender
-        denomination == packet.denom
+        sourceChain == channel[1]
+        destinationChain == channel[2]
+        isTokenSource == sourceChain = NativeChainOf(packet.denom)
         IN
-        /\ chains' = [chains EXCEPT 
-                        ![source][refundee][denomination] = chains[source][refundee][denomination] + refundAmount,
-                        ![source][EscrowAcc][denomination] = chains[source][EscrowAcc][denomination] - refundAmount]
+        /\  IF isTokenSource
+            THEN LocalTransfer(sourceChain, EscrowAcc, packet.sender, packet.denom, packet.amount)
+            ELSE MintCoins(sourceChain, packet.sender, packet.denom, packet.amount)
         /\ channels' = [channels EXCEPT ![channel] = channels[channel] \ {packet}]
 
+ReceivePacket(channel, packet) ==
+    /\ LET 
+        sourceChain == channel[1]
+        destinationChain == channel[2]
+        isTokenSource == destinationChain = NativeChainOf(packet.denom)
+        IN
+        /\  IF isTokenSource
+            THEN LocalTransfer(destinationChain, EscrowAcc, packet.receiver, packet.denom, packet.amount)
+            ELSE MintCoins(destinationChain, packet.receiver, packet.denom, packet.amount)
+        /\ channels' = [channels EXCEPT ![channel] = channels[channel] \ {packet}]
+
+ReceivePacketStep == 
+    /\ \E channel \in ChannelNameType:
+        /\ \E packet \in channels[channel]:
+            /\ ReceivePacket(channel, packet)
+    /\ UNCHANGED << totalSupply, lastPacketId >>
 
 TimeoutPacketStep ==
     \E channel \in ChannelNameType:
         \E packet \in channels[channel]:
-            RefundTokens(packet, channel)
+            /\ RefundTokens(channel, packet)
     /\ UNCHANGED << totalSupply, lastPacketId >>
 
 FailAcknowledgePacketStep ==
     \E channel \in ChannelNameType:
         \E packet \in channels[channel]:
-            RefundTokens(packet, channel)
+            /\ RefundTokens(channel, packet)
     /\ UNCHANGED << totalSupply, lastPacketId >>
 
 \* Specification
 
 Init ==
     /\ chains = (
-        BTC :> (Acc1 :> (BTC :> 1 @@ ETH :> 1) @@ Acc2 :> (BTC :> 0 @@ ETH :> 1) @@ Acc3 :> (BTC :> 1 @@ ETH :> 1) @@ EscrowAcc :> (BTC :> 1 @@ ETH :> 1)) @@
-        ETH :> (Acc1 :> (BTC :> 0 @@ ETH :> 1) @@ Acc2 :> (BTC :> 1 @@ ETH :> 1) @@ Acc3 :> (BTC :> 1 @@ ETH :> 1) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0))
+        \* BTC escrow should have at least the *sum of all non-BTC chain BTC balances* tokens
+        BTC :> (Acc1 :> (BTC :> 1 @@ ETH :> 1) @@ Acc2 :> (BTC :> 0 @@ ETH :> 1) @@ Acc3 :> (BTC :> 1 @@ ETH :> 0) @@ EscrowAcc :> (BTC :> 2 @@ ETH :> 0)) @@
+        ETH :> (Acc1 :> (BTC :> 1 @@ ETH :> 1) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 1) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 2))
         )
     /\ channels = (<<BTC, ETH>> :> {} @@ <<ETH, BTC>> :> {})
     /\ totalSupply = GENESIS_SUPPLY
@@ -153,10 +182,11 @@ Init ==
     \*     /\ lastPacketId = 0
 
 Next == 
-    /\  \/ LocalTransferStep
-        \/ CreateOutgoingPacketStep
-        \/ TimeoutPacketStep
-        \/ FailAcknowledgePacketStep 
+    \/ LocalTransferStep
+    \/ CreateOutgoingPacketStep
+    \/ TimeoutPacketStep
+    \/ FailAcknowledgePacketStep 
+    \/ ReceivePacketStep
 
 Spec == Init /\ [][Next]_vars
 
@@ -180,8 +210,8 @@ NoOverdrafts ==
         chains[chainName][acc][denom] >= 0
 
 \* Just a temporary debugging helper invariant
-\* TEMP_SupplyDoesNotIncrease == 
-\*     /\ \A denom \in CoinDenominations:
-\*         /\ Sum([acc \in AccountNames |-> accounts[acc][denom]], DOMAIN accounts) = GENESIS_SUPPLY[denom]
+TEMP_SupplyDoesNotIncrease == 
+    /\ \A denom \in CoinDenominations:
+        /\ Sum([acc \in AccountNames |-> chains[denom][acc][denom]], DOMAIN chains[denom]) <= MAX_SUPPLY_HEIGHT
 
 =============================================================================
