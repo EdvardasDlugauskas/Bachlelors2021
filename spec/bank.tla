@@ -8,7 +8,7 @@ EXTENDS Naturals, Integers, FiniteSets, Sequences, TLC
 CONSTANTS ETH, BTC, DOGE
 CONSTANTS EscrowAcc, Acc1, Acc2, Acc3, Acc4, Acc5
 
-ChainNames == {ETH, BTC} \*, DOGE}
+ChainNames == {ETH, BTC, DOGE}
 CoinDenominations == ChainNames
 
 AccountNames == {EscrowAcc, Acc1, Acc2, Acc3} \*, Acc4, Acc5}
@@ -19,9 +19,6 @@ MAX_PACKET_COUNT == 0..MAX_PACKET_COUNT_HEIGHT
 MAX_SUPPLY_HEIGHT == 4
 MAX_SUPPLY == 0..MAX_SUPPLY_HEIGHT
 GENESIS_SUPPLY == [c \in CoinDenominations |-> MAX_SUPPLY_HEIGHT]
-
-MAX_INT_HEIGHT == 1 \* TODO: change
-MAX_INT == 0..MAX_INT_HEIGHT
 
 \* Type
 
@@ -163,10 +160,11 @@ FailAcknowledgePacketStep ==
 Init ==
     /\ chains = (
         \* BTC escrow should have at least the *sum of all non-BTC chain BTC balances* tokens
-        BTC :> (Acc1 :> (BTC :> 1 @@ ETH :> 1) @@ Acc2 :> (BTC :> 0 @@ ETH :> 1) @@ Acc3 :> (BTC :> 1 @@ ETH :> 0) @@ EscrowAcc :> (BTC :> 2 @@ ETH :> 0)) @@
-        ETH :> (Acc1 :> (BTC :> 1 @@ ETH :> 1) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 1) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 2))
+        BTC :> (Acc1 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 2 @@ ETH :> 0 @@ DOGE :> 0)) @@
+        ETH :> (Acc1 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 2 @@ DOGE :> 0)) @@
+        DOGE :> (Acc1 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 3) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 1) @@ Acc3 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0)) 
         )
-    /\ channels = (<<BTC, ETH>> :> {} @@ <<ETH, BTC>> :> {})
+    /\ channels = (<<BTC, ETH>> :> {} @@ <<ETH, BTC>> :> {} @@ <<ETH, DOGE>> :> {} @@ <<BTC, DOGE>> :> {} @@ <<DOGE, ETH>> :> {} @@ <<DOGE, BTC>> :> {})
     /\ totalSupply = GENESIS_SUPPLY
     /\ lastPacketId = 0
 
@@ -212,6 +210,6 @@ NoOverdrafts ==
 \* Just a temporary debugging helper invariant
 TEMP_SupplyDoesNotIncrease == 
     /\ \A denom \in CoinDenominations:
-        /\ Sum([acc \in AccountNames |-> chains[denom][acc][denom]], DOMAIN chains[denom]) <= MAX_SUPPLY_HEIGHT
+        /\ Sum([acc \in AccountNames |-> chains[denom][acc][denom]], DOMAIN chains[denom]) = MAX_SUPPLY_HEIGHT
 
 =============================================================================
