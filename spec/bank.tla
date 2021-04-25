@@ -1,32 +1,29 @@
 -------------------------------- MODULE bank --------------------------------
 
-
 EXTENDS Naturals, Integers, FiniteSets, Sequences, TLC
 
 \* Constants
 
 CONSTANTS ETH, BTC, DOGE
-CONSTANTS EscrowAcc, Acc1, Acc2, Acc3, Acc4, Acc5
+CONSTANTS EscrowAcc, Acc1, Acc2, Acc3
+CONSTANTS MAX_SUPPLY_HEIGHT, MAX_PACKET_COUNT_HEIGHT
 
 ChainNames == {ETH, BTC, DOGE}
 CoinDenominations == ChainNames
 
-AccountNames == {EscrowAcc, Acc1, Acc2, Acc3} \*, Acc4, Acc5}
+AccountNames == {EscrowAcc, Acc1, Acc2, Acc3}
 
-MAX_PACKET_COUNT_HEIGHT == 3
 MAX_PACKET_COUNT == 0..MAX_PACKET_COUNT_HEIGHT
 
-MAX_SUPPLY_HEIGHT == 4
 MAX_SUPPLY == 0..MAX_SUPPLY_HEIGHT
+
 GENESIS_SUPPLY == [c \in CoinDenominations |-> MAX_SUPPLY_HEIGHT]
 
 \* Type
 
-CoinType == [CoinDenominations -> Int] \* MAX_SUPPLY
+CoinType == [CoinDenominations -> MAX_SUPPLY]
 
 AccountType == [AccountNames -> CoinType]
-
-TotalSupplyType == [CoinDenominations -> Int] \* MAX_SUPPLY
 
 ChainType == [ChainNames -> AccountType]
 
@@ -39,22 +36,30 @@ ChannelType == [ChannelNameType -> SUBSET PacketType]
 \* Vars
 
 VARIABLE chains
-VARIABLE totalSupply
 VARIABLE channels
 VARIABLE lastPacketId
 
-vars == << chains, channels, totalSupply, lastPacketId >>
+vars == << chains, channels, lastPacketId >>
 
 \* Helpers
 
 NativeChainOf(denomination) == denomination
 
+Pick(S) == CHOOSE s \in S : TRUE
+RECURSIVE SetReduce(_, _, _)
+SetReduce(Op(_, _), S, value) == IF S = {} THEN value
+                              ELSE LET s == Pick(S)
+                              IN SetReduce(Op, S \ {s}, Op(s, value)) 
+
+Sum(S) == LET _op(a, b) == a + b
+          IN SetReduce(_op, S, 0)
+
 \* Here f is a function of DOMAIN -> Int, S is the subset of DOMAIN to calculate the sum over
-RECURSIVE Sum(_,_)
-Sum(f,S) == IF S = {} THEN 0
+RECURSIVE SumDomain(_,_)
+SumDomain(f,S) == IF S = {} THEN 0
             ELSE 
-                LET x == CHOOSE x \in S : TRUE
-                IN  f[x] + Sum(f, S \ {x})
+                LET x == Pick(S)
+                IN  f[x] + SumDomain(f, S \ {x})
 
 \* Transitions  
 
@@ -83,7 +88,7 @@ LocalTransferStep ==
     /\ \E chain \in ChainNames, sender, receiver \in AccountNames \ {EscrowAcc}, denomination \in CoinDenominations:
             /\  \E amount \in 0..chains[chain][sender][denomination]:
                 ConditionalLocalTransfer(NativeChainOf(denomination), sender, receiver, denomination, amount)
-    /\ UNCHANGED << totalSupply, channels, lastPacketId >>
+    /\ UNCHANGED << channels, lastPacketId >>
     
  CreateOutgoingPacket(channel, sender, receiver, denomination, amount) ==
      /\ channel[1] /= channel[2]
@@ -113,7 +118,7 @@ CreateOutgoingPacketStep ==
     /\ \E channel \in ChannelNameType, sender, receiver \in AccountNames \ {EscrowAcc}, denom \in CoinDenominations:
         \E amt \in 0..chains[channel[1]][sender][denom]:
             /\ ConditionalCreateOutgoingPacket(channel, sender, receiver, denom, amt)
-    /\ UNCHANGED totalSupply
+    /\ UNCHANGED << >>
 
 RefundTokens(channel, packet) ==
     /\ LET 
@@ -141,42 +146,58 @@ ReceivePacketStep ==
     /\ \E channel \in ChannelNameType:
         /\ \E packet \in channels[channel]:
             /\ ReceivePacket(channel, packet)
-    /\ UNCHANGED << totalSupply, lastPacketId >>
+    /\ UNCHANGED << lastPacketId >>
 
 TimeoutPacketStep ==
     \E channel \in ChannelNameType:
         \E packet \in channels[channel]:
             /\ RefundTokens(channel, packet)
-    /\ UNCHANGED << totalSupply, lastPacketId >>
+    /\ UNCHANGED << lastPacketId >>
 
 FailAcknowledgePacketStep ==
     \E channel \in ChannelNameType:
         \E packet \in channels[channel]:
             /\ RefundTokens(channel, packet)
-    /\ UNCHANGED << totalSupply, lastPacketId >>
+    /\ UNCHANGED << lastPacketId >>
 
 \* Specification
 
 Init ==
+    \* Pre-configured state for MAX_SUPPLY_HEIGHT == 1
     /\ chains = (
-        \* BTC escrow should have at least the *sum of all non-BTC chain BTC balances* tokens
-        BTC :> (Acc1 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 2 @@ ETH :> 0 @@ DOGE :> 0)) @@
-        ETH :> (Acc1 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 2 @@ DOGE :> 0)) @@
-        DOGE :> (Acc1 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 3) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 1) @@ Acc3 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0)) 
+        BTC :> (Acc1 :> (BTC :> 1 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0)) @@
+        ETH :> (Acc1 :> (BTC :> 0 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0)) @@
+        DOGE :> (Acc1 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 1) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0)) 
         )
     /\ channels = (<<BTC, ETH>> :> {} @@ <<ETH, BTC>> :> {} @@ <<ETH, DOGE>> :> {} @@ <<BTC, DOGE>> :> {} @@ <<DOGE, ETH>> :> {} @@ <<DOGE, BTC>> :> {})
-    /\ totalSupply = GENESIS_SUPPLY
     /\ lastPacketId = 0
+
+    \* \* Pre-configured state for MAX_SUPPLY_HEIGHT == 2
+    \* /\ chains = (
+    \*     \* BTC escrow should have at least the "sum of all non-BTC chain BTC balances" tokens
+    \*     BTC :> (Acc1 :> (BTC :> 0 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 1 @@ ETH :> 0 @@ DOGE :> 0)) @@
+    \*     ETH :> (Acc1 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 2 @@ DOGE :> 0)) @@
+    \*     DOGE :> (Acc1 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 2) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0)) 
+    \*     )
+    \* /\ channels = (<<BTC, ETH>> :> {} @@ <<ETH, BTC>> :> {} @@ <<ETH, DOGE>> :> {} @@ <<BTC, DOGE>> :> {} @@ <<DOGE, ETH>> :> {} @@ <<DOGE, BTC>> :> {})
+    \* /\ lastPacketId = 0
+
+    \* \* Pre-configured state for MAX_PACKET_COUNT_HEIGHT == 3 and MAX_SUPPLY_HEIGHT == 4
+    \* /\ chains = (
+    \*     BTC :> (Acc1 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 2 @@ ETH :> 0 @@ DOGE :> 0)) @@
+    \*     ETH :> (Acc1 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ Acc3 :> (BTC :> 1 @@ ETH :> 1 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 2 @@ DOGE :> 0)) @@
+    \*     DOGE :> (Acc1 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 3) @@ Acc2 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 1) @@ Acc3 :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0) @@ EscrowAcc :> (BTC :> 0 @@ ETH :> 0 @@ DOGE :> 0)) 
+    \*     )
+    \* /\ channels = (<<BTC, ETH>> :> {} @@ <<ETH, BTC>> :> {} @@ <<ETH, DOGE>> :> {} @@ <<BTC, DOGE>> :> {} @@ <<DOGE, ETH>> :> {} @@ <<DOGE, BTC>> :> {})
+    \* /\ lastPacketId = 0
 
     \* /\ \E c \in ChainType, chan \in ChannelType:
     \*     /\ chains = c
     \*     /\ \A denom \in CoinDenominations:
-    \*         /\ Sum([acc \in AccountNames |-> c[denom][acc][denom]], DOMAIN c[denom]) = GENESIS_SUPPLY[denom]
+    \*         /\ SumDomain([acc \in AccountNames |-> c[NativeChainOf(denom)][acc][denom]], DOMAIN c[NativeChainOf(denom)]) = GENESIS_SUPPLY[denom]
 
     \*     /\ \A channelName \in ChannelNameType: chan[channelName] = {}
     \*     /\ channels = chan
-
-    \*     /\ totalSupply = GENESIS_SUPPLY
     \*     /\ lastPacketId = 0
 
 Next == 
@@ -186,30 +207,36 @@ Next ==
     \/ FailAcknowledgePacketStep 
     \/ ReceivePacketStep
 
-Spec == Init /\ [][Next]_vars
+Spec == Init /\ [][Next]_vars 
+             /\ WF_vars(ReceivePacketStep)
 
-\* Invariants
+\* Invariants and properties
 
 TypeOK == 
     /\ chains \in ChainType
-    /\ totalSupply \in TotalSupplyType
     /\ channels \in ChannelType
     /\ lastPacketId \in Int
 
 TotalSupplyCorrect == 
-    \A denom \in CoinDenominations:
-        LET
-            chainName == denom
-            amountInAccounts == [acc \in AccountNames |-> chains[chainName][acc][denom]]
-        IN totalSupply[denom] = Sum(amountInAccounts, DOMAIN chains[chainName])
+    /\ \A denom \in CoinDenominations:
+        /\ SumDomain([acc \in AccountNames |-> chains[denom][acc][denom]], DOMAIN chains[denom]) = MAX_SUPPLY_HEIGHT
 
 NoOverdrafts == 
     \A chainName \in ChainNames, acc \in AccountNames, denom \in CoinDenominations: 
         chains[chainName][acc][denom] >= 0
 
-\* Just a temporary debugging helper invariant
-TEMP_SupplyDoesNotIncrease == 
-    /\ \A denom \in CoinDenominations:
-        /\ Sum([acc \in AccountNames |-> chains[denom][acc][denom]], DOMAIN chains[denom]) = MAX_SUPPLY_HEIGHT
+EscrowHasEnoughTokensToCoverAllIncomingNativePackets ==
+    \A channel \in ChannelNameType:
+        LET
+            receiverDenom == channel[2]
+            receiverChainEscrow == chains[NativeChainOf(receiverDenom)][EscrowAcc]
+            incomingNativeCoinPackets == {packet \in channels[channel]: packet.denom = receiverDenom}
+            minimumEscrowAmount == Sum({p.amount: p \in incomingNativeCoinPackets})
+        IN
+            receiverChainEscrow[receiverDenom] >= minimumEscrowAmount
+
+SentPacketsArriveOrGetDropped ==
+    \A channel \in ChannelNameType: \A packet \in PacketType: 
+        packet \in channels[channel] ~> packet \notin channels[channel]
 
 =============================================================================
